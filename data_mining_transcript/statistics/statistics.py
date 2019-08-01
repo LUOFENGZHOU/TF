@@ -1,149 +1,90 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 import pandas as pd
 import numpy as np
-import pymysql
-import datetime
+import re
+import glob
+import time
+import os
+
 NULL_THRES = 0.2
 record_filename = r"out_proc_sort.tsv"
 qa_pair_dir = r"E:/0523会计数据版本/0610分步处理数据/0610原始数据/v2/qapair/"
+save_dir = "./save_stat/"
+filelist = glob.glob(qa_pair_dir + "*.tsv")
 
-def get_next_corp(df, t_next):
-    corp_now = df["Ticker"][t_next]
-    i = t_next
-    while df["Ticker"][i+1] == corp_now:
-        i += 1
-    return corp_now, df[t_next:i+1], i+1
+# define dictionaries
 
-class LogFile:
-    def __init__(self):
-        self.logs_corp = []
-    def push(self, corp):
-        self.logs_corp.append(corp)
-        print("Error : " + corp)
-    def out(self):
-        return pd.DataFrame(self.logs_corp).T.to_csv("errorv2.log")
-# read file
-#def tfill(df):
-#    fyear = list(df["Fyear"])
-#    fquart = list(df["Fquarter"])
-#    t_len = len(fyear)
-#    null_list = []
-#    for _ in range(t_len):
-#        if fyear[_] == "ERROR" or fquart[_] == "ERROR":
-#            null_list.append(0)
-#        else:
-#            null_list.append(1)
-#        nlen = len(null_list) / t_len
-#    if nlen > t_len * NULL_THRES:
-#        print("Too many null items")
-#        return False, df
-#    rate_list = []
-#    for i in range(len(fquart)):
-#        if i == "ERROR":
-#            continue
-#        rate_list.append([(j - i + int(fquart[i][1]) -1) % 4 + 1 for j in range(len(fquart))])
-#    for_times = len(rate_list)
-#    rating = 
+DISC_VERB_NO_NOUN = r"(be\b\s?([\w’,&@#$%_\-\(\)\[\]]+\s){0,1}specific|announce|announced|announcing|answer|answered|answering|breakdown|breakout|break out|breaking out|broken out|break that out|break it out|break those out|breaking that out|breaking it out|breaking those out|broken that out|broken it out|broken those out|comment|commented|commenting|disclose|disclosed|disclosing|discuss|discussed|discussing|divulge|divulged|divulging|elaborate|elaborated|elaborating|estimate|estimated|estimating|forecast|forecasted|forecasting|guide|guided|guiding|predict|predicted|predicting|report|reported|reporting|reveal|revealed|revealing|speculate|speculated|speculating|say about|say anything|say more|say any more|say much more|say too much|said about|said anything|said more|said any more|said much more|said too much|talk about|talked about)"
 
-def get_trade_time(tic, db_ip="localhost" , db_username="root" , db_password="zaqxswcd", db_name="new_schema1"):
-    '''
-    Get the record in database.
-    '''
-    db = pymysql.connect(db_ip, db_username, db_password, db_name )
-    cursor = db.cursor()
-    cursor.execute("USE new_schema")
-    cursor.execute("SELECT gvkey, fyear, tic, datadate FROM ggg WHERE tic = \"" + tic + "\"")
-    ind_list = cursor.fetchall()
-    db.close()
-    return pd.DataFrame(np.array([np.array(_) for _ in ind_list]))
+WORD_CHAR = r"[a-zA-z]"
+    
+DISC_VERB_NOUN=r"(address|addressed|addressing|explain|explanation|get into|get|getting|give|given|giving|go into|going into|got into|gotten into|mention|mentioned|mentioning|on record|present|presented|presenting|provide|provided|providing|quantified|quantify|quantifying|release|released|releasing|speak|speaking|specified|specify|specifying|spoke|supplied|supply|supplying|talk|talked|talking|tell|told|update|updated|updating)"
 
+DEFERRAL=r"(difficult|impossible|infeasible|hard|decline|refuse|refrain|unable|never|all I can|all we can|all I will|all we will|about all)"
 
+DISC_NOUN= r"(too much|much more|account|accounts|acquisition|acquisitions|activity|activities|amount|amounts|analysis|answer|answers|anything|asset|assets|backlog|backlogs|balance|balances|breakdown|budget|budgets|capital|cash|change|changes|comparison|comparisons|component|components|condition|conditions|content|contract|contracts|cost|costs|coverage|credit|data|deal|deals|debt|demand|demands|detail|details|development|developments|direction|directions|distribution|dollar|dollars|earnings|equity|equities|estimate|estimates|expansion|expansions|expectation|expectations|expense|expenses|exposure|fact|facts|factor|factors|fee|fees|figure|figures|financing|forecast|forecasts|funding|growth|guidance|income|incomes|information|interest|inventory|inventories|investment|investments|liquidity|loan|loans|loss|losses|magnitude|magnitudes|management|margin|margins|marketing|metric|metrics|model|models|money|name|names|needs|news|number|numbers|operations|option|options|order|orders|partner|partners|percent|percentage|percentages|performance|plan|plans|point|points|policy|policies|portfolio|portfolios|price|prices|pricing|profit|profits|profitability|progress|project|projects|projection|projections|quality|quantification|quantity|quantities|range|ranges|rate|rates|ratio|ratios|reason|reasons|reserve|reserves|result|results|revenue|revenues|risk|risks|sale|sales|savings|share|shares|size|sizes|specific|specifics|specifically|spending|statement|statements|statistic|statistics|strategy|supplier|suppliers|supply|supplies|target|targets|tax|taxes|term|terms|transaction|transactions|trend|trends|value|values|volume|volumes)"
+   
 
+# define regex
 
+# Refuse non-answers
+#TYPE=REFUSE
+# {Disclosure Verb}..."no"...{Disclosure Noun}
+refuse1 = re.compile(r"(?i)\b" + DISC_VERB_NOUN + r"\b\s?(" + WORD_CHAR + r"+\s){0,2}no\b\s?(" + WORD_CHAR + r"+\s){0,2}" + DISC_NOUN + r"\b")
+# {Disclosure Verb}..."no"
+refuse2 = re.compile(r"(?i)\b" + DISC_VERB_NO_NOUN + r"\b\s?(" + WORD_CHAR + r"+\s){0,2}no\b")
+# {Negation}...{Disclosure Verb}
+refuse3 = re.compile(r"(?i)(n(’|‘)t|\bnot|cannot|without)\b\s?(" + WORD_CHAR + r"+\s){0,8}" + DISC_VERB_NO_NOUN + r"\b")
+# {Negation}...{Disclosure Verb}...{Disclosure Noun}
+refuse4 = re.compile(r"(?i)(n(’|‘)t|\bnot|cannot|without)\b\s?(" + WORD_CHAR + r"+\s){0,8}" + DISC_VERB_NOUN + r"\b\s?(" + WORD_CHAR + r"+\s){0,8}" + DISC_NOUN + r"\b")
+# {Deferral}...{Disclosure Verb}
+refuse5 = re.compile(r"(?i)\b" + DEFERRAL + r"\b\s?(" + WORD_CHAR + r"+\s){0,8}" + DISC_VERB_NO_NOUN + r"\b")
+refuse6 = re.compile(r"(?i)\b" + DEFERRAL + r"\b\s?(" + WORD_CHAR + r"+\s){0,8}" + DISC_VERB_NOUN + r"\b\s?(" + WORD_CHAR + r"+\s){0,8}" + DISC_NOUN + r"\b")
 
+# Unable non-answers
+#TYPE=UNABLE
+unable1 = re.compile(r"(?i)\b(I|we)\b\s?(" + WORD_CHAR + r"+\s){0,2}((do(n(’|‘)t| not))|(can(’t|not| not)))\b\s?(" + WORD_CHAR + r"+\s){0,2}(know|recall|remember)\b")
+unable2 = re.compile(r"(?i)\b(I|we) have no idea\b")
+unable3 = re.compile(r"(?i)\b(I|we) do(n(’|‘)t| not)\b\s?(" + WORD_CHAR + r"+\s){0,2}(have (the|it|that|this|those))\b")
+unable4 = re.compile(r"(?i)(n(’|‘)t|\bnot|cannot|without)\b\s?(" + WORD_CHAR + r"+\s){0,8}(share|sharing|shared)\b\s?(" + WORD_CHAR + r"+\s){0,8}(with)\b")
 
-
-
-def find_near(li, val):
-    '''
-    return index of li.
-    '''
-    if (li[0] - val).days > 0 and (li[0] - val).days < 360:
-        return 0
-    for i in range(1, len(li)):
-        if 0 < (li[i] - val).days and  (li[i] - val).days < 360 and (val-li[i-1]).days > 0:
-            return i
-        elif (val-li[i-1]).days < 0:
-            return i - 1
-    return False
-
-logs = LogFile()
-df = pd.read_csv(record_filename, encoding = "utf-8", sep = "\t")
-
-def is_distinct(ls):
-    past = ls[0]
-    for i in ls:
-        if i != past:
-            return False
-    return True
-
-# segmentation
-t_next = 0
-init = True
-fyear_append = []
-gvkey_append = []
-Num_append = []
-for i in range(len(df)-1):
-#for i in [0]:
+# After-call non-answers
+#TYPE=AFTERCALL
+aftercall = re.compile(r"(?i)\b(off-line|offline|after the call|after call|another (time|day))\b")
+begin_time = time.time()
+counter = 0
+for i in filelist:
+    name = i[44:-4]
+    if os.path.exists(save_dir + name + "_proc.tsv"):
+        continue
+    print(name + " " + str(counter))
     try:
-        t_ticker, t_sep_list, t_next = get_next_corp(df, t_next) # seperate by company
+        data = pd.read_csv(open(i, encoding = "utf-8"), sep = "\t", encoding = "utf-8")
     except:
         continue
-    gvkeylist = get_trade_time(t_ticker)
-
-    if len(gvkeylist) == 0:
-        print("ticker not found: " + t_ticker)
-        logs.push(t_ticker)
-        continue
-    if not is_distinct(gvkeylist[0]):
-        print("changing ticker: " + t_ticker)
-        logs.push(t_ticker)
-        continue
-    if not is_distinct([_.month for _ in gvkeylist[3]]):
-        print("changing month: " + t_ticker)
-        logs.push(t_ticker)
-        continue
-
-
-
-    if gvkeylist[1][0] == gvkeylist[3][0].year:
-        rel = 0
-    else:
-        rel = -1
-    month_t = gvkeylist[3][0].month
-    truemonth_t = (month_t + 3) % 12
-    if month_t > truemonth_t:
-        year_t = 1
-    else:
-        year_t = 0
-    yearlist_t = [_ for _ in range(gvkeylist[3].min().year + year_t, gvkeylist[3].max().year + year_t + 1)]
-    if truemonth_t == 12:
-        datelist_t = [datetime.date(_,12,31) for _ in yearlist_t]
-    else:
-        datelist_t = [datetime.date(_,truemonth_t+1,1) - datetime.timedelta(1) for _ in yearlist_t]
-    # change time format
-    tplist = []
-    for d in t_sep_list["Adatetime"]:
-        tplist.append(datetime.date(int(str(d)[0:4]), int(str(d)[4:6]), int(str(d)[6:8])))
-
-    for cs in range(len(tplist)):
-        ddd = find_near(datelist_t, tplist[cs])
-        if ddd != False:
-            gvkey_append.append(gvkeylist[0][0])
-            fyear_append.append(datelist_t[ddd].year + rel - year_t)
-            Num_append.append(np.array(t_sep_list["Num"])[cs])
-    print("Over!")
-#    t_sep_list = tfill(t_sep_list)
-#    ylist, fnamelist, 
-#pd.DataFrame([fyear_append, gvkey_append, Num_append]).T.to_csv("outputmerge.csv", encoding = "utf-8")
-#logs.out()
+    qlist = data["2"]
+    alist = data["3"]
+    data["4"] = data["1"]
+    for j in range(len(alist)):
+        counter += 1
+        r1 = len(re.findall(refuse1, alist[j]))
+        r2 = len(re.findall(refuse2, alist[j]))
+        r3 = len(re.findall(refuse3, alist[j]))
+        r4 = len(re.findall(refuse4, alist[j]))
+        r5 = len(re.findall(refuse5, alist[j]))
+        r6 = len(re.findall(refuse6, alist[j]))
+        r = r1 + r2 + r3 + r4 + r5 + r6
+        u1 = len(re.findall(unable1, alist[j]))
+        u2 = len(re.findall(unable2, alist[j]))
+        u3 = len(re.findall(unable3, alist[j]))
+        u4 = len(re.findall(unable4, alist[j]))
+        u = u1 + u2 + u3 + u4
+        a = len(re.findall(aftercall, alist[j]))
+        data["2"][j] = r
+        data["3"][j] = u
+        data["4"][j] = a
+        midtime = time.time()
+        print("Speed : " + str(counter / (midtime - begin_time )), end = "\r")
+    data.to_csv(save_dir + name + "_proc.tsv", encoding = "utf-8", sep = "\t")
+    print("Speed : " + str(counter / (midtime - begin_time )))
+print("Over: " + str(counter))
