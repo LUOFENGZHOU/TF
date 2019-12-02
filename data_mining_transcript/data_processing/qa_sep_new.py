@@ -29,8 +29,7 @@ class logfile:
         l = pd.DataFrame([self.error_id, self.error_type]).transpose()
         l.to_csv(filename, encoding = "utf-8")
 
-if __name__=='__main__':
-
+def trans_qa_sep():
     _mainlist = pd.read_csv("out_proc.tsv", sep = "\t", encoding = "utf-8")
     
     _secpattern = re.compile("<strong>[^<>]*?Answer[^<>]*?<br/></strong></p>.*</p>",re.DOTALL|re.M|re.I)
@@ -61,6 +60,3 @@ if __name__=='__main__':
                     log.push(_mainlist["AlphaIndex"][i],"Multiple Findings")
     log.out("error_v2.log")
 
-
-                
-            
